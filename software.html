@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Software Engineering - Botta's Blog</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <header class="header">
+        <div class="logo">Code Chronicles</div>
+        <nav class="nav">
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="#">About</a></li>
+                <li><a href="software.html">Software Blog</a></li>
+                <li><a href="life.html">Life Blog</a></li>
+                <li><a href="#">Contact</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <div class="blog-container">
+        <article class="featured-post">
+            <h2 class="post-title">Understanding Modern JavaScript Features</h2>
+            <div class="post-meta">Posted on: March 15, 2024 | JavaScript</div>
+            <div class="post-excerpt">
+                Deep dive into the latest JavaScript features and how they're changing the way we write code...
+            </div>
+            <div class="code-preview">
+                // Example of modern JS features
+                const handleAsync = async () => {
+                try {
+                const data = await fetchData();
+                return data?.results ?? [];
+                } catch (error) {
+                console.error(error);
+                }
+                };
+            </div>
+            <div class="post-tags">
+                <span class="tag">JavaScript</span>
+                <span class="tag">ES6+</span>
+                <span class="tag">Modern Web</span>
+            </div>
+        </article>
+
+        <article class="post-card">
+            <h2 class="post-title">Kernel Support for Virtualization</h2>
+            <div class="post-meta">Posted on: March 18, 2024 | Infrastructure</div>
+            <div class="post-excerpt">
+                How we tuned the Linux kernel to unlock nested virtualization, protect noisy neighbors, and ship emulator-ready
+                CI runners without re-imaging the fleet.
+            </div>
+            <div class="code-preview">
+                # Enable nested virtualization with EPT support
+                options kvm_intel nested=1 ept=1 fast_mmio=1
+            </div>
+            <div class="post-tags">
+                <span class="tag">KVM</span>
+                <span class="tag">Kernel</span>
+                <span class="tag">Virtualization</span>
+            </div>
+            <div class="post-actions">
+                <a class="button-cyber" href="kernel-support-virtualization.html">Read the deep dive</a>
+                <a class="text-link" href="software-post-template.html">Use the new post template</a>
+            </div>
+        </article>
+
+        <article class="post-card">
+            <h2 class="post-title">React Performance Optimization</h2>
+            <div class="post-meta">Posted on: March 14, 2024 | React</div>
+            <div class="post-excerpt">
+                Essential techniques for optimizing your React applications for better performance...
+            </div>
+            <div class="code-preview">
+                const MemoizedComponent = React.memo(({ data }) => {
+                return <div>{data.map(item =>
+                    <Item key={item.id} {...item} />
+                    )}
+                </div>
+                });
+            </div>
+            <div class="post-tags">
+                <span class="tag">React</span>
+                <span class="tag">Performance</span>
+                <span class="tag">JavaScript</span>
+            </div>
+        </article>
+
+        <article class="post-card">
+            <h2 class="post-title">Building Scalable APIs with Node.js</h2>
+            <div class="post-meta">Posted on: March 13, 2024 | Backend</div>
+            <div class="post-excerpt">
+                Best practices and patterns for creating maintainable Node.js APIs...
+            </div>
+            <div class="code-preview">
+                app.use('/api', rateLimit({
+                windowMs: 15 * 60 * 1000,
+                max: 100
+                }));
+            </div>
+            <div class="post-tags">
+                <span class="tag">Node.js</span>
+                <span class="tag">API</span>
+                <span class="tag">Backend</span>
+            </div>
+        </article>
+
+        <article class="post-card">
+            <h2 class="post-title">TypeScript Advanced Types</h2>
+            <div class="post-meta">Posted on: March 12, 2024 | TypeScript</div>
+            <div class="post-excerpt">
+                Exploring advanced TypeScript features for better type safety...
+            </div>
+            <div class="code-preview">
+                type DeepPartial<T> = {
+                    [P in keyof T]?: T[P] extends object
+                    ? DeepPartial<T[P]>
+                        : T[P];
+                        };
+            </div>
+            <div class="post-tags">
+                <span class="tag">TypeScript</span>
+                <span class="tag">Advanced</span>
+                <span class="tag">Types</span>
+            </div>
+        </article>
+
+        <article class="post-card">
+            <h2 class="post-title">Software Post Template</h2>
+            <div class="post-meta">Reusable Layout | Authoring</div>
+            <div class="post-excerpt">
+                Save time when publishing new software posts. The template ships with hero copy, meta blocks, implementation
+                notes, metrics grid, and a resource list ready for your content.
+            </div>
+            <div class="post-tags">
+                <span class="tag">Template</span>
+                <span class="tag">Docs</span>
+                <span class="tag">Workflow</span>
+            </div>
+            <div class="post-actions">
+                <a class="button-cyber" href="software-post-template.html">Open template</a>
+            </div>
+        </article>
+    </div>
+
+    <div class="pagination">
+        <a href="#" class="page-number">1</a>
+        <a href="#" class="page-number">2</a>
+        <a href="#" class="page-number">3</a>
+    </div>
+</body>
+
+</html>

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kernel Support for Virtualization - Botta's Blog</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <header class="header">
+        <div class="logo">Code Chronicles</div>
+        <nav class="nav">
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="#">About</a></li>
+                <li><a href="software.html">Software Blog</a></li>
+                <li><a href="life.html">Life Blog</a></li>
+                <li><a href="#">Contact</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main class="article-page">
+        <section class="article-hero">
+            <div class="article-category">Systems Engineering</div>
+            <h1>Kernel Support for Virtualization</h1>
+            <p class="article-subtitle">How we tuned the Linux kernel to unlock nested virtualization and keep latency-friendly
+                scheduling guarantees for our internal sandbox fleet.</p>
+            <div class="article-meta">
+                <span class="meta-pill">Published: March 18, 2024</span>
+                <span class="meta-pill">Reading time: 7 minutes</span>
+                <span class="meta-pill">Stack: Linux, KVM, cgroups</span>
+            </div>
+            <div class="article-hero-actions post-actions">
+                <a href="software.html" class="button-cyber">Back to Software Blog</a>
+                <a href="software-post-template.html" class="text-link">Use this layout for your post</a>
+            </div>
+        </section>
+
+        <section class="article-content">
+            <div class="content-block">
+                <h2 class="section-title">Executive Summary</h2>
+                <p>Product asked for a way to run Android emulators inside our CI runners while the infrastructure team was
+                    rebuilding bare-metal hosts. The default kernel image blocked nested virtualization and caused unpredictable
+                    context switches. We patched and recompiled a minimal kernel, enabled the required modules, and added guardrails
+                    so build teams could opt-in with a single flag.</p>
+            </div>
+
+            <div class="content-block">
+                <h2 class="section-title">Problem Statement</h2>
+                <p>Our in-house sandbox fleet uses KVM on Ubuntu LTS, but the kernel shipped without nested virtualization features,
+                    meaning emulator workloads had to run on scarce GPU builders. Meanwhile VM density dropped by 30% because of
+                    scheduler contention when we tried enabling nested support naively.</p>
+                <div class="callout-grid">
+                    <div class="callout-card">
+                        <h3>Primary Objective</h3>
+                        <p>Support nested virtualization for Android + QEMU pipelines without destabilizing the fleet.</p>
+                    </div>
+                    <div class="callout-card">
+                        <h3>Guardrails</h3>
+                        <p>No downtime for long-running staging VMs and no regression in noisy-neighbor isolation.</p>
+                    </div>
+                    <div class="callout-card">
+                        <h3>Timeline</h3>
+                        <p>Investigation (1 sprint), prototype kernel (1 sprint), rollout + observability (2 sprints).</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="content-block">
+                <h2 class="section-title">Architecture / Flow</h2>
+                <p>We kept our existing PXE boot image but layered in two components:</p>
+                <ul>
+                    <li>Feature-gated kernel build with the `kvm_intel` and `kvm_amd` modules configured for nested support.</li>
+                    <li>An agent extension that detects nested workloads and shifts them into latency-friendly cgroup slices.</li>
+                </ul>
+                <p>The control plane now publishes a metadata flag per VM pool, so clusters mix legacy and nested-enabled hosts
+                    without double-imaging racks.</p>
+            </div>
+
+            <div class="content-block">
+                <h2 class="section-title">Implementation Notes</h2>
+                <ul>
+                    <li>Recompiled the kernel with `CONFIG_KVM_INTEL=y`, `CONFIG_KVM_AMD=y`, and turned on `CONFIG_PREEMPT` to reduce
+                        worst-case scheduling jitter.</li>
+                    <li>Added a systemd unit that writes sane defaults (`posted_intr=1`, `enable_apicv=1`) before the hypervisor
+                        spins up guests.</li>
+                    <li>Extended our observability stack with eBPF counters (vmexit, posted interrupts) so we could compare nested vs
+                        standard hosts in Grafana.</li>
+                </ul>
+            </div>
+
+            <div class="content-block">
+                <h2 class="section-title">Code Reference</h2>
+                <p>This is the snippet we drop into `/etc/modprobe.d/kvm.conf` on every nested-enabled host:</p>
+                <div class="code-block">
+                    <pre><code># Enable nested virtualization with EPT support
+options kvm_intel nested=1 ept=1 fast_mmio=1
+
+# Tune halt polling window for emulator-heavy workloads
+options kvm halt_poll_ns_grow=20000 halt_poll_ns_shrink=500
+
+# AMD fallback
+options kvm_amd nested=1 npt=1
+</code></pre>
+                </div>
+            </div>
+
+            <div class="content-block">
+                <h2 class="section-title">Key Metrics / Signals</h2>
+                <div class="callout-grid">
+                    <div class="callout-card">
+                        <h3>Before</h3>
+                        <p>Average emulator boot time: 268s. Host CPU steal above 18% for heavy tenants.</p>
+                        <span class="pill">Baseline</span>
+                    </div>
+                    <div class="callout-card">
+                        <h3>After</h3>
+                        <p>Boot time dropped to 143s and CPU steal stayed under 8% after tuning halt-poll + cpuset layouts.</p>
+                        <span class="pill">Result</span>
+                    </div>
+                    <div class="callout-card">
+                        <h3>Monitoring</h3>
+                        <p>Grafana dashboard `INFRA/KVM-NESTED` tracks vmexit rate, IRQ latency, and cgroup throttling events.</p>
+                        <span class="pill">Ops</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="content-block">
+                <h2 class="section-title">Learnings &amp; Next Steps</h2>
+                <p class="insight-quote">"Treat nested virtualization as an opt-in kernel personality. The build system and
+                    telemetry hooks matter more than the actual `CONFIG` bits."</p>
+                <p>Next, we're beta-testing AMD Genoa hosts to see if SEV-SNP plus nested virtualization is viable for multi-tenant
+                    customers. We'll also ship an Ansible role so partner teams can re-image lab hardware with the same defaults.</p>
+            </div>
+
+            <div class="content-block">
+                <h2 class="section-title">Resources</h2>
+                <ul class="resource-links">
+                    <li><a href="https://www.kernel.org/doc/html/latest/virt/kvm/index.html">Official KVM kernel docs</a></li>
+                    <li><a href="https://docs.kernel.org/admin-guide/kernel-parameters.html">Kernel parameter reference</a></li>
+                    <li><a href="https://fedoraproject.org/wiki/How_to_enable_nested_virtualization_in_KVM">How-to for nested
+                            virtualization</a></li>
+                </ul>
+            </div>
+        </section>
+    </main>
+</body>
+
+</html>
