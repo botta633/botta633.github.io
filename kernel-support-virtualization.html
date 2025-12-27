@@ -29,7 +29,7 @@
         </p>
         <div class="article-meta">
             <span class="meta-pill">Published: December 27, 2025</span>
-            <span class="meta-pill">Reading time: 12 minutes</span>
+            <span class="meta-pill">Reading time: 15 minutes</span>
             <span class="meta-pill">Stack: Linux / C / OverlayFS</span>
         </div>
         <div class="article-hero-actions">
@@ -44,180 +44,155 @@
                 A "container" does not exist as a first-class object in the Linux kernel. It is a userspace concept realized by combining three distinct kernel features: <strong>Namespaces</strong> (what you can see), <strong>Control Groups</strong> (what you can use), and <strong>Layered File Systems</strong> (how you store data).
             </p>
             <p>
-                In this post, we peel back the abstraction layer of tools like Docker or Podman. We will examine the `task_struct` kernel pointers that enforce isolation, write a C program to create a namespace from scratch, and analyze how OverlayFS achieves copy-on-write efficiency.
+                In this post, we provide a high-level architectural overview of this trinity. This is the <strong>Part 1</strong> foundation; we will be releasing deep-dive articles for each specific component in the coming weeks.
             </p>
         </div>
 
         <div class="content-block">
-            <h2 class="section-title">Problem Statement</h2>
+            <h2 class="section-title">The Illusion of Isolation</h2>
             <p>
-                Traditional virtualization (VMs) relies on hypervisors to emulate hardware, which introduces significant overhead in boot time and memory footprint. We needed a way to run multiple applications on a single kernel while maintaining strict isolation and resource fairness.
+                Traditional virtualization (VMs) relies on hypervisors to emulate hardware, which introduces significant overhead in boot time and memory footprint because you are running a full OS kernel on top of another kernel. Containers take a different approach: they share the host kernel but lie to the process about the resources it sees.
             </p>
             
+            
+
             <div class="callout-grid">
                 <div class="callout-card">
-                    <h3>Isolation (Namespaces)</h3>
-                    <p>
-                        How do we prevent Process A from seeing Process B's PIDs or network traffic?
-                    </p>
+                    <h3>1. Namespaces</h3>
+                    <p><strong>The Walls.</strong> They limit the <em>visibility</em> of system resources (PIDs, Mounts, Network).</p>
                 </div>
                 <div class="callout-card">
-                    <h3>Accounting (cgroups)</h3>
-                    <p>
-                        How do we stop a single runaway process from consuming 100% of the host CPU?
-                    </p>
+                    <h3>2. Cgroups</h3>
+                    <p><strong>The Budget.</strong> They limit the <em>usage</em> of physical resources (CPU, RAM, Disk I/O).</p>
                 </div>
                 <div class="callout-card">
-                    <h3>Efficiency (Layered FS)</h3>
-                    <p>
-                        How do we spin up 100 containers from a 1GB image without using 100GB of disk space?
-                    </p>
+                    <h3>3. Layered FS</h3>
+                    <p><strong>The Floorplan.</strong> They provide the <em>efficiency</em> of storage via Copy-on-Write (CoW).</p>
                 </div>
             </div>
         </div>
 
         <div class="content-block">
-            <h2 class="section-title">Architecture: The Process View</h2>
+            <h2 class="section-title">1. Namespaces: The Walls</h2>
             <p>
-                Every process in Linux is represented by a <code>task_struct</code>. To create a container, we don't build a new machine; we simply clone the current process but point its internal metadata structures to new, empty instances rather than the host's global structures.
+                <strong>Role:</strong> Namespaces wrap global system resources in an abstraction that makes it appear to the processes within the namespace that they have their own isolated instance of the global resource.
+            </p>
+            <p>
+                <strong>Mechanism:</strong> When you clone a process with the <code>CLONE_NEWPID</code> flag, the kernel creates a new PID namespace. Inside this new scope, the process sees itself as PID 1 (the init process). However, in the host's root namespace, that same process might be PID 4523. This mapping allows the kernel to maintain a global truth while presenting a local view to the container.
             </p>
             
+            
+
             <p>
-                The kernel handles this via pointers attached to the process descriptor:
+                Other critical namespaces include:
             </p>
             <ul>
-                <li><strong><code>struct nsproxy</code></strong>: Holds pointers to the process's specific namespaces (PID, NET, MNT, UTS, IPC, USER).</li>
-                <li><strong><code>struct css_set</code></strong>: Points to the cgroup hierarchy ensuring the process adheres to resource limits.</li>
+                <li><strong>MNT (Mount):</strong> Allows the container to have its own root filesystem (<code>/</code>) independent of the host.</li>
+                <li><strong>NET (Network):</strong> Gives the container its own <code>eth0</code>, IP address, and routing table.</li>
+                <li><strong>UTS:</strong> Allows the container to have its own hostname.</li>
             </ul>
-        </div>
-
-        <div class="content-block">
-            <h2 class="section-title">Code Reference: The Mechanics</h2>
-            <p>
-                Let's look at how these concepts map to actual code, starting with Namespaces.
-            </p>
-
-            <h3>1. Namespaces: The Walls</h3>
-            <p>
-                In the kernel source (<code>include/linux/nsproxy.h</code>), isolation is achieved by decoupling a process from the global system context.
-            </p>
-            <div class="code-block">
-<pre><code><span class="code-comment">/* kernel/nsproxy.c - Simplified view */</span>
-<span class="code-keyword">struct</span> <span class="code-type">nsproxy</span> {
-    <span class="code-type">atomic_t</span> count;
-    <span class="code-keyword">struct</span> <span class="code-type">uts_namespace</span> *uts_ns;
-    <span class="code-keyword">struct</span> <span class="code-type">ipc_namespace</span> *ipc_ns;
-    <span class="code-keyword">struct</span> <span class="code-type">mnt_namespace</span> *mnt_ns;
-    <span class="code-keyword">struct</span> <span class="code-type">pid_namespace</span> *pid_ns_for_children;
-    <span class="code-keyword">struct</span> <span class="code-type">net</span> 	         *net_ns;
-};</code></pre>
-            </div>
-            <p>
-                To enter a new namespace, we use the <code>clone()</code> syscall with specific flags. Here is a minimal C program that creates a process with its own hostname (UTS) and Process ID (PID) view.
-            </p>
 
             <div class="code-block">
-<pre><code><span class="code-comment">// minimal_container.c</span>
+<pre><code><span class="code-comment">// minimal_container.c - Creating a namespace</span>
 <span class="code-keyword">#define</span> _GNU_SOURCE
 <span class="code-keyword">#include</span> &lt;sched.h&gt;
-<span class="code-keyword">#include</span> &lt;stdio.h&gt;
-<span class="code-keyword">#include</span> &lt;stdlib.h&gt;
-<span class="code-keyword">#include</span> &lt;unistd.h&gt;
-
-<span class="code-keyword">static</span> <span class="code-type">char</span> child_stack[1048576];
+<span class="code-comment">// ... standard headers ...</span>
 
 <span class="code-keyword">static</span> <span class="code-type">int</span> <span class="code-function">child_fn</span>(<span class="code-type">void</span> *arg) {
-    <span class="code-comment">// We are now PID 1 inside this namespace!</span>
+    <span class="code-comment">// To this process, it is PID 1</span>
     <span class="code-function">printf</span>(<span class="code-string">"PID inside container: %ld\n"</span>, (<span class="code-type">long</span>)<span class="code-function">getpid</span>());
     <span class="code-function">sethostname</span>(<span class="code-string">"container-node"</span>, <span class="code-number">14</span>);
-    <span class="code-function">system</span>(<span class="code-string">"mount -t proc proc /proc"</span>); <span class="code-comment">// Remount proc to hide host processes</span>
     <span class="code-function">execlp</span>(<span class="code-string">"/bin/bash"</span>, <span class="code-string">"/bin/bash"</span>, NULL);
     <span class="code-keyword">return</span> <span class="code-number">0</span>;
 }
 
 <span class="code-type">int</span> <span class="code-function">main</span>() {
-    <span class="code-comment">// CLONE_NEWPID: New PID namespace</span>
-    <span class="code-comment">// CLONE_NEWUTS: New Hostname namespace</span>
-    <span class="code-comment">// CLONE_NEWNS:  New Mount namespace</span>
-    <span class="code-type">pid_t</span> child_pid = <span class="code-function">clone</span>(child_fn, child_stack + <span class="code-number">1048576</span>, 
-        CLONE_NEWPID | CLONE_NEWUTS | CLONE_NEWNS | SIGCHLD, NULL);
-    
+    <span class="code-comment">// CLONE_NEWPID | CLONE_NEWUTS creates the "Walls"</span>
+    <span class="code-type">pid_t</span> child_pid = <span class="code-function">clone</span>(child_fn, stack + <span class="code-number">1048576</span>, 
+        CLONE_NEWPID | CLONE_NEWUTS | SIGCHLD, NULL);
     <span class="code-function">waitpid</span>(child_pid, NULL, <span class="code-number">0</span>);
     <span class="code-keyword">return</span> <span class="code-number">0</span>;
 }</code></pre>
             </div>
+            <p><em>Coming soon in Part 2: We will deep dive into `struct nsproxy` and manually construct a networking namespace.</em></p>
+        </div>
 
-            <h3>2. cgroups: The Budget</h3>
+        <div class="content-block">
+            <h2 class="section-title">2. cgroups: The Budget</h2>
             <p>
-                While namespaces hide information, Control Groups (cgroups) limit resources. In cgroup v2, the kernel uses the <code>cgroup_subsys_state</code> struct to track usage.
+                <strong>Role:</strong> While namespaces hide processes from each other, they don't stop one container from eating all the host's RAM. This is where Control Groups (cgroups) come in. They organize processes into a hierarchy and impose limits on CPU cycles, memory usage, and block I/O.
             </p>
             <p>
-                We can manipulate this purely via the filesystem. No C code required—just shell.
+                <strong>Mechanism:</strong> In cgroup v2, the kernel associates every process with a <code>css_set</code> (Control Group Subsystem State). The scheduler checks these states before allocating CPU time. If a group exceeds its `memory.max`, the Kernel OOM (Out of Memory) Killer triggers within that specific cgroup, killing the container process to save the host.
             </p>
+
+            
+
             <div class="code-block">
-<pre><code><span class="code-comment"># Create a new cgroup</span>
+<pre><code><span class="code-comment"># Interaction is done via the virtual filesystem /sys/fs/cgroup</span>
+
+<span class="code-comment"># 1. Create the group (budget bucket)</span>
 mkdir /sys/fs/cgroup/my_container
 
-<span class="code-comment"># Limit CPU usage to 20% (20000 of 100000 microseconds)</span>
+<span class="code-comment"># 2. Set the budget (20% CPU, 512MB RAM)</span>
 echo "20000 100000" > /sys/fs/cgroup/my_container/cpu.max
-
-<span class="code-comment"># Limit Memory to 512MB</span>
 echo "536870912" > /sys/fs/cgroup/my_container/memory.max
 
-<span class="code-comment"># Add the current shell (and its children) to this group</span>
+<span class="code-comment"># 3. Assign the process to the budget</span>
 echo $$ > /sys/fs/cgroup/my_container/cgroup.procs</code></pre>
             </div>
+            <p><em>Coming soon in Part 3: A practical guide to cgroup v2, OOM killer mechanics, and noisy neighbor prevention.</em></p>
+        </div>
 
-            <h3>3. Layered Filesystems (OverlayFS): The Floorplan</h3>
+        <div class="content-block">
+            <h2 class="section-title">3. Layered Filesystems (OverlayFS): The Floorplan</h2>
+            <p>
+                <strong>Role:</strong> If we had to copy the entire 1GB Ubuntu root filesystem every time we started a container, it would be slow and wasteful. Layered filesystems like OverlayFS allow multiple containers to share a single read-only base image while giving each one its own writable scratchpad.
+            </p>
+            <p>
+                <strong>Mechanism:</strong> OverlayFS uses a union mount to combine multiple directories:
+            </p>
+            <ul>
+                <li><strong>LowerDir (Read-Only):</strong> The base OS image. Shared by everyone.</li>
+                <li><strong>UpperDir (Read-Write):</strong> The container's private layer.</li>
+                <li><strong>WorkDir:</strong> Internal scratch space for the kernel.</li>
+            </ul>
+            <p>
+                When you write to a file that exists in the LowerDir, the kernel performs a <strong>Copy-on-Write (CoW)</strong> operation: it pauses the write, copies the file up to the UpperDir, and then applies the modification there.
+            </p>
+
             
-            <p>
-                To start containers instantly, we rely on Union Filesystems. OverlayFS combines a read-only <strong>LowerDir</strong> (the base image) with a writable <strong>UpperDir</strong>.
-            </p>
-            <p>
-                When a process reads a file, the kernel looks in the UpperDir; if missing, it falls through to LowerDir. When writing, if the file exists in LowerDir, the kernel performs a <strong>copy_up</strong> operation, copying the file to UpperDir before modification.
-            </p>
+
             <div class="code-block">
-<pre><code><span class="code-comment"># How a container runtime mounts the image layers</span>
+<pre><code><span class="code-comment"># Manually mounting an OverlayFS to simulate a container root</span>
 mount -t overlay overlay \
   -o lowerdir=/var/lib/images/ubuntu_base, \
      upperdir=/var/lib/containers/c1/diff, \
      workdir=/var/lib/containers/c1/work \
   /var/lib/containers/c1/merged</code></pre>
             </div>
+            <p><em>Coming soon in Part 4: Visualizing the "Copy-up" latency and how storage drivers affect database performance in containers.</em></p>
         </div>
 
         <div class="content-block">
-            <h2 class="section-title">Key Metrics / Signals</h2>
+            <h2 class="section-title">Series Roadmap</h2>
+            <p>
+                We've established the high-level theory. Over the next few weeks, we will break these down individually:
+            </p>
             <div class="callout-grid">
                 <div class="callout-card">
-                    <h3>Startup Latency</h3>
-                    <p>
-                        <strong>VM:</strong> 30s - 2min (BIOS post + Kernel Boot + Init).<br>
-                        <strong>Container:</strong> &lt;100ms. It is literally just a <code>clone()</code> syscall cost plus filesystem mount overhead.
-                    </p>
-                    <span class="pill">Performance</span>
+                    <h3>Next: Part 2</h3>
+                    <p><strong>Namespaces in Depth:</strong> Coding a container runtime from zero in C.</p>
                 </div>
                 <div class="callout-card">
-                    <h3>Storage Density</h3>
-                    <p>
-                        Running 10 instances of Ubuntu.<br>
-                        <strong>VM:</strong> 10GB (10 x 1GB duplicates).<br>
-                        <strong>OverlayFS:</strong> 1.1GB (1GB Shared Base + 10 x 10MB diffs).
-                    </p>
-                    <span class="pill">Efficiency</span>
+                    <h3>Then: Part 3</h3>
+                    <p><strong>Mastering cgroups:</strong> Resource accounting and isolation strategies.</p>
+                </div>
+                <div class="callout-card">
+                    <h3>Finally: Part 4</h3>
+                    <p><strong>Storage Drivers:</strong> Overlay2, Btrfs, and the mechanics of image layers.</p>
                 </div>
             </div>
-        </div>
-
-        <div class="content-block">
-            <h2 class="section-title">Learnings &amp; Next Steps</h2>
-            <p>
-                Understanding these primitives demystifies container errors. "Permission Denied" often maps to User Namespaces; "OOM Killed" maps directly to <code>memory.max</code> in cgroups; and confusing file disappearances can often be traced to OverlayFS opaque directories.
-            </p>
-            <p class="insight-quote">"A container is not a sandbox; it is a shared kernel with blinders on. The security boundary is significantly thinner than a hypervisor."</p>
-            <p>
-                Next, I want to explore <strong>eBPF</strong> (Extended Berkeley Packet Filter) and how modern observability tools use it to peek <em>through</em> these namespaces to monitor container performance from the host.
-            </p>
         </div>
 
         <div class="content-block">
