@@ -1,0 +1,27 @@
+/* Image styling for responsive fit */
+img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+}
+
+.flamegraphs-grid img,
+.content-block img {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    margin: 1.5em 0;
+}
+
+figure {
+    margin: 2em 0;
+    padding: 0;
+}
+
+figcaption {
+    margin-top: 1em;
+    font-style: italic;
+    color: var(--article-muted);
+    font-size: 0.95em;
+}

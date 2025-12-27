@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FS Cache Performance: When Smaller Records Hurt Throughput - Botta's Blog</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+
+<body>
+    <header class="header">
+        <div class="logo">Code Chronicles</div>
+        <nav class="nav">
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="#">About</a></li>
+                <li><a href="software.html">Software Blog</a></li>
+                <li><a href="life.html">Life Blog</a></li>
+                <li><a href="#">Contact</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main class="article-page">
+        <section class="article-hero">
+            <div class="article-category">Software Playbook</div>
+            <h1>FS Cache Performance: When Smaller Records Hurt Throughput</h1>
+            <p class="article-subtitle">
+                A practical experiment showing how file-system cache behavior and read() syscall overhead can
+                make tiny record sizes slower than larger ones.
+            </p>
+            <div class="article-meta">
+                <span class="meta-pill">Published: December 26, 2025</span>
+                <span class="meta-pill">Reading time: 15 minutes</span>
+                <span class="meta-pill">Stack: Linux / perf / strace</span>
+            </div>
+            <div class="article-hero-actions">
+                <a href="software.html" class="button-cyber">Back to Software Blog</a>
+            </div>
+        </section>
+
+        <section class="article-content">
+            <!-- Executive Summary -->
+            <div class="content-block">
+                <h2 class="section-title">Executive Summary</h2>
+                <p>
+                    I ran a controlled benchmark on Linux to test a claim from Brendan Gregg’s performance work:
+                    as the file system cache grows in number of records, performance can actually get worse.
+                    By reading a fixed 8&nbsp;GiB file using different record sizes (4&nbsp;KiB → 1&nbsp;MiB) and
+                    profiling with <code>strace</code> and <code>perf</code>, I showed that:
+                </p>
+                <ul>
+                    <li>64&nbsp;KiB records were the “sweet spot” for my machine.</li>
+                    <li>4&nbsp;KiB records made the job almost 2× slower, even though the same total bytes were read.</li>
+                    <li>The extra cost came from kernel page-cache management and syscall overhead, not from disk I/O.</li>
+                </ul>
+                <p>
+                    This post walks through the experiment design, the tools, and the kernel functions that showed up
+                    in the profiles (<code>filemap_get_pages</code>, <code>xas_load</code>, <code>__filemap_add_folio</code>,
+                    <code>copy_page_to_iter</code>, etc.).
+                </p>
+            </div>
+
+            <!-- Problem Statement -->
+            <div class="content-block">
+                <h2 class="section-title">Problem Statement</h2>
+                <p>
+                    The question I wanted to answer was:
+                    <strong>“Why did file system performance degrade as the FS cache grew in size (in records)?”</strong>
+                    In other words, if the total data size is fixed but we make each record smaller, we create more
+                    cache entries. At some point, is the overhead of managing all those entries worse than the benefit
+                    of finer granularity?
+                </p>
+                <p>
+                    To make this concrete, I wanted numbers for:
+                </p>
+                <ul>
+                    <li>Wall-clock time to read 8&nbsp;GiB.</li>
+                    <li>Total syscall time and syscall counts from <code>strace -c</code>.</li>
+                    <li>CPU cycles and hot kernel functions from <code>perf record</code>/<code>perf report</code>.</li>
+                </ul>
+
+                <div class="callout-grid">
+                    <div class="callout-card">
+                        <h3>Primary Objective</h3>
+                        <p>
+                            Demonstrate that shrinking record size (and therefore increasing the number of cached
+                            records) can make performance <em>worse</em>, and tie this to concrete kernel functions
+                            in the page-cache path.
+                        </p>
+                    </div>
+                    <div class="callout-card">
+                        <h3>Guardrails</h3>
+                        <p>
+                            Keep the workload simple and reproducible:
+                            sequential binary file, no application logic, single binary compiled with <code>gcc -O2</code>,
+                            run on a quiet machine with page cache dropped between runs.
+                        </p>
+                    </div>
+                    <div class="callout-card">
+                        <h3>Timeline</h3>
+                        <p>
+                            One evening of implementation and scripting, plus another evening of profiling,
+                            interpretation, and writing this post.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Architecture / Flow -->
+            <div class="content-block">
+                <h2 class="section-title">Architecture / Flow</h2>
+                <p>
+                    The “architecture” here is intentionally small:
+                    a single benchmark binary, a single 8&nbsp;GiB file, and a loop that repeatedly calls
+                    <code>pread()</code> with a configurable record size.
+                    Around that, I wrapped <code>strace</code> and <code>perf</code> to collect syscall
+                    and CPU profiles.
+                </p>
+
+                <!-- IMAGE PLACEHOLDER: high-level experiment diagram -->
+                <!--
+                <img src="images/fs-cache-experiment-diagram.png"
+                     alt="High-level diagram of the FS cache experiment: fs_bench process, page cache, disk, and measurement tools (strace, perf).">
+                -->
+
+                <p>
+                    Conceptually, each run looks like this:
+                </p>
+                <ol>
+                    <li>Drop page cache with <code>sync &amp;&amp; echo 3 &gt; /proc/sys/vm/drop_caches</code>.</li>
+                    <li>Run <code>fs_bench</code> with a given <code>--record-size</code>.</li>
+                    <li>Wrap the run with <code>strace -c</code> to measure total syscall time.</li>
+                    <li>Repeat with <code>perf stat</code> and <code>perf record -g</code> for deeper profiling.</li>
+                </ol>
+                <p>
+                    Inside the kernel, each <code>pread()</code> call follows roughly this path:
+                    <code>pread → vfs_read → filemap_read → filemap_get_pages → xas_load / __filemap_add_folio
+                    → copy_page_to_iter</code>. The interesting part is how often these functions are called when we use
+                    4&nbsp;KiB vs 64&nbsp;KiB records.
+                </p>
+            </div>
+
+            <!-- Implementation Notes -->
+            <div class="content-block">
+                <h2 class="section-title">Implementation Notes</h2>
+                <p>
+                    The benchmark program (<code>fs_bench</code>) is intentionally tiny: it opens a file,
+                    then issues <code>pread()</code> calls in a loop until <code>total_bytes</code> have been read.
+                    Record size and access pattern (<code>seq</code> vs <code>rand</code>) are command-line arguments.
+                </p>
+                <ul>
+                    <li>
+                        <strong>Phase 1 — Benchmark binary.</strong>
+                        Implemented in C with a simple loop around <code>pread()</code>. No timing inside the
+                        binary to keep it easy to profile with external tools.
+                    </li>
+                    <li>
+                        <strong>Phase 2 — Experiment harness.</strong>
+                        Shell/Python wrapper that:
+                        <ul>
+                            <li>dropped page cache between runs,</li>
+                            <li>ran <code>strace -c</code> to capture syscall counts and time,</li>
+                            <li>ran <code>perf stat</code> and <code>perf record -g</code> for CPU and call-stack stats,</li>
+                            <li>logged results into a CSV for plotting.</li>
+                        </ul>
+                    </li>
+                    <li>
+                        <strong>Phase 3 — Analysis.</strong>
+                        Plotted record size vs wall-time and syscall time, then correlated those with
+                        hot functions in <code>perf report</code> (e.g., <code>filemap_get_pages</code>,
+                        <code>xas_load</code>, <code>__filemap_add_folio</code>, <code>copy_page_to_iter</code>).
+                    </li>
+                </ul>
+            </div>
+
+            <!-- Code Reference -->
+            <div class="content-block">
+                <h2 class="section-title">Code Reference</h2>
+                <p>
+                    This section shows the critical pieces: the user-space benchmark loop, and a simplified view of
+                    the kernel’s page-cache lookup path we saw in <code>perf report</code>.
+                </p>
+
+                <h3>User-space benchmark (<code>fs_bench</code>)</h3>
+                <div class="code-block">
+                    <pre><code><span class="code-comment">// fs_bench.c (simplified)</span>
+<span class="code-keyword">static</span> <span class="code-type">void</span> <span class="code-function">run_benchmark</span>(<span class="code-type">int</span> fd, <span class="code-type">size_t</span> record_size, <span class="code-type">off_t</span> total_bytes) {
+    <span class="code-type">char</span> <span class="code-operator">*</span>buf = <span class="code-function">aligned_alloc</span>(<span class="code-number">4096</span>, record_size);
+    <span class="code-keyword">if</span> (<span class="code-operator">!</span>buf) { <span class="code-function">perror</span>(<span class="code-string">"alloc"</span>); <span class="code-function">exit</span>(<span class="code-number">1</span>); }
+
+    <span class="code-type">off_t</span> offset = <span class="code-number">0</span>;
+    <span class="code-type">off_t</span> read_bytes = <span class="code-number">0</span>;
+
+    <span class="code-keyword">while</span> (read_bytes <span class="code-operator">&lt;</span> total_bytes) {
+        <span class="code-type">ssize_t</span> n = <span class="code-function">pread</span>(fd, buf, record_size, offset);
+        <span class="code-keyword">if</span> (n <span class="code-operator">&lt;</span> <span class="code-number">0</span>) {
+            <span class="code-function">perror</span>(<span class="code-string">"pread"</span>);
+            <span class="code-keyword">break</span>;
+        }
+        <span class="code-keyword">if</span> (n <span class="code-operator">==</span> <span class="code-number">0</span>) {
+            <span class="code-comment">// EOF - wrap around or stop, depending on mode</span>
+            <span class="code-keyword">break</span>;
+        }
+
+        read_bytes <span class="code-operator">+=</span> n;
+        offset     <span class="code-operator">+=</span> n; <span class="code-comment">// sequential mode; random mode picks offset differently</span>
+    }
+
+    <span class="code-function">free</span>(buf);
+}</code></pre>
+                </div>
+                <p>
+                    The important part for FS cache behavior is that <strong>only record size changes</strong>.
+                    Total bytes (<code>total_bytes</code>) stay constant at 8&nbsp;GiB, so shrinking
+                    <code>record_size</code> means “more operations for the same data”.
+                    In the 4&nbsp;KiB case, this translates to millions of <code>pread()</code> calls; at 64&nbsp;KiB,
+                    the same amount of data is covered by ~16× fewer calls.
+                </p>
+
+                <h3>Kernel page-cache lookup path (pseudocode)</h3>
+                <div class="code-block">
+                    <pre><code><span class="code-comment">// Extremely simplified view inspired by mm/filemap.c</span>
+
+<span class="code-type">ssize_t</span> <span class="code-function">filemap_read</span>(<span class="code-keyword">struct</span> <span class="code-type">file</span> <span class="code-operator">*</span>file, <span class="code-keyword">struct</span> <span class="code-type">iov_iter</span> <span class="code-operator">*</span>iter) {
+    <span class="code-keyword">struct</span> <span class="code-type">address_space</span> <span class="code-operator">*</span>mapping = file<span class="code-operator">-&gt;</span>f_mapping;
+    <span class="code-type">pgoff_t</span> index = <span class="code-function">offset_to_index</span>(file<span class="code-operator">-&gt;</span>f_pos);
+
+    <span class="code-keyword">while</span> (<span class="code-function">iov_iter_count</span>(iter) <span class="code-operator">&gt;</span> <span class="code-number">0</span>) {
+        <span class="code-keyword">struct</span> <span class="code-type">folio_batch</span> fb;
+        <span class="code-function">folio_batch_init</span>(<span class="code-operator">&amp;</span>fb);
+
+        <span class="code-comment">// 1) Lookup or fetch folios from the page cache for this range</span>
+        <span class="code-type">int</span> nr = <span class="code-function">filemap_get_pages</span>(mapping, file, <span class="code-operator">&amp;</span>index, <span class="code-operator">&amp;</span>fb);
+
+        <span class="code-comment">// 2) Copy data from folios to user buffers</span>
+        <span class="code-keyword">for</span> (i = <span class="code-number">0</span>; i <span class="code-operator">&lt;</span> nr; i<span class="code-operator">++</span>) {
+            <span class="code-keyword">struct</span> <span class="code-type">folio</span> <span class="code-operator">*</span>f = fb.folios[i];
+            <span class="code-function">copy_page_to_iter</span>(f, iter);   <span class="code-comment">// shows up hot in perf</span>
+        }
+
+        <span class="code-function">folio_batch_release</span>(<span class="code-operator">&amp;</span>fb);
+    }
+}</code></pre>
+                </div>
+
+                <p>
+                    <code>filemap_get_pages()</code> is where the XArray and folios come into play:
+                    it walks the page-cache index (<code>mapping-&gt;i_pages</code>), which is an
+                    <strong>XArray</strong> mapping file offsets to <strong>folio</strong> objects.
+                    Internally it uses helpers like <code>xas_load()</code> to look up cached folios and
+                    <code>__filemap_add_folio()</code> to insert new ones on a miss.
+                </p>
+
+                <div class="code-block">
+                    <pre><code><span class="code-comment">// Rough mental model of how filemap_get_pages() behaves</span>
+
+<span class="code-type">int</span> <span class="code-function">filemap_get_pages</span>(<span class="code-keyword">struct</span> <span class="code-type">address_space</span> <span class="code-operator">*</span>mapping,
+                      <span class="code-keyword">struct</span> <span class="code-type">file</span> <span class="code-operator">*</span>file,
+                      <span class="code-type">pgoff_t</span> <span class="code-operator">*</span>index,
+                      <span class="code-keyword">struct</span> <span class="code-type">folio_batch</span> <span class="code-operator">*</span>fb) {
+    <span class="code-keyword">struct</span> <span class="code-type">xa_state</span> xas;
+    <span class="code-function">xas_init</span>(<span class="code-operator">&amp;</span>xas, <span class="code-operator">&amp;</span>mapping<span class="code-operator">-&gt;</span>i_pages, <span class="code-operator">*</span>index);
+
+    <span class="code-keyword">while</span> (<span class="code-operator">!</span><span class="code-function">folio_batch_full</span>(fb)) {
+        <span class="code-keyword">struct</span> <span class="code-type">folio</span> <span class="code-operator">*</span>f = <span class="code-function">xas_load</span>(<span class="code-operator">&amp;</span>xas);   <span class="code-comment">// XArray lookup</span>
+
+        <span class="code-keyword">if</span> (<span class="code-operator">!</span>f) {
+            <span class="code-comment">// Page cache miss: allocate folio and start I/O</span>
+            f = <span class="code-function">page_cache_ra_unbounded</span>(mapping, file, <span class="code-operator">&amp;</span>xas);
+        }
+
+        <span class="code-function">folio_get</span>(f);
+        <span class="code-function">folio_batch_add</span>(fb, f);
+
+        (<span class="code-operator">*</span>index)<span class="code-operator">++</span>;
+        <span class="code-function">xas_next</span>(<span class="code-operator">&amp;</span>xas);
+    }
+
+    <span class="code-keyword">return</span> <span class="code-function">folio_batch_count</span>(fb);
+}</code></pre>
+                </div>
+
+                <p>
+                    In the 4&nbsp;KiB run, <code>perf report</code> showed functions like
+                    <code>filemap_get_pages</code>, <code>xas_load</code>, and
+                    <code>__filemap_add_folio</code> consuming a significant fraction of CPU cycles.
+                    That’s the kernel doing <em>metadata work</em> to manage a huge number of tiny cache entries.
+                    At 64&nbsp;KiB, the same 8&nbsp;GiB is covered by far fewer folios, so these functions are called
+                    less often and their overhead drops.
+                </p>
+
+                <h3>Syscall perspective from <code>strace -c</code></h3>
+                <p>
+                    On top of the kernel functions, <code>strace -c</code> showed that:
+                </p>
+                <ul>
+                    <li>
+                        For 4&nbsp;KiB records, the benchmark issued millions of <code>read</code>/<code>pread</code>
+                        syscalls, with total syscall time ≈ 6&nbsp;s.
+                    </li>
+                    <li>
+                        For 64&nbsp;KiB records, syscall count dropped by ~16×, and total syscall time stayed closer
+                        to ~1.5&nbsp;s.
+                    </li>
+                </ul>
+                <p>
+                    That difference in syscall volume is what drives the hot path in
+                    <code>copy_page_to_iter</code> (data copying) and the page-cache management functions discussed above.
+                </p>
+            </div>
+
+            <!-- Key Metrics / Signals -->
+            <div class="content-block">
+                <h2 class="section-title">Key Metrics / Signals</h2>
+                <p>
+                    All runs read the same 8&nbsp;GiB file; only the record size changed.
+                    Numbers below are representative from one profiling session.
+                </p>
+
+                <!-- IMAGE PLACEHOLDER: graph of record_size vs wall_time / syscall_time -->
+                <!--
+                <img src="images/fs-cache-record-size-vs-time.png"
+                     alt="Graph showing wall time and syscall time vs record size, with a sweet spot around 64 KiB and degradation at 4 KiB.">
+                -->
+
+                <div class="callout-grid">
+                    <div class="callout-card">
+                        <h3>Before (large records)</h3>
+                        <p>
+                            1&nbsp;MiB records: ~1.14&nbsp;s wall time, ~16k syscalls. Throughput is okay,
+                            but not optimal on this machine.
+                        </p>
+                        <span class="pill">Baseline</span>
+                    </div>
+                    <div class="callout-card">
+                        <h3>After (sweet spot at 64&nbsp;KiB)</h3>
+                        <p>
+                            64&nbsp;KiB records: ~0.68&nbsp;s wall time, ~262k syscalls.
+                            This was the best-performing configuration and served as the “good”
+                            reference point for the negative test.
+                        </p>
+                        <span class="pill">Best Result</span>
+                    </div>
+                    <div class="callout-card">
+                        <h3>Negative Test (4&nbsp;KiB)</h3>
+                        <p>
+                            4&nbsp;KiB records: ~1.30&nbsp;s wall time, ~4.1M syscalls, ~6.1&nbsp;s of total syscall time.
+                            <code>perf report</code> shows heavy time in page-cache lookup, folio insertion,
+                            and data copying, confirming that tiny records can make the FS cache expensive to manage.
+                        </p>
+                        <span class="pill">Experiment Signal</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Learnings & Next Steps -->
+            <div class="content-block">
+                <h2 class="section-title">Learnings &amp; Next Steps</h2>
+                <p>
+                    The experiment confirmed the hypothesis from the book: making the FS cache “larger” in
+                    number of records (by shrinking record size) can hurt performance because the kernel spends
+                    more time walking and updating its page-cache metadata structures. On this machine, 64&nbsp;KiB
+                    records struck a good balance between syscall overhead and cache management work.
+                </p>
+                <p>
+                    Next, I'd like to:
+                </p>
+                <ul>
+                    <li>
+                        Repeat the experiment with <code>mmap()</code> instead of <code>pread()</code> to compare
+                        the fault-driven path against the explicit syscall path.
+                    </li>
+                    <li>
+                        Try datasets larger than RAM to force real eviction behavior and watch how
+                        <code>filemap_get_pages</code> and reclaim functions behave.
+                    </li>
+                    <li>
+                        Extend the benchmark to test <code>O_DIRECT</code> I/O and see when bypassing the page cache
+                        wins for database-like workloads.
+                    </li>
+                </ul>
+            </div>
+
+            <!-- Resources -->
+            <div class="content-block">
+                <h2 class="section-title">Resources</h2>
+                <ul class="resource-links">
+                    <li>Brendan Gregg’s writing on file system cache and negative tests (book + blog).</li>
+                    <li>
+                        Linux kernel source: <code>mm/filemap.c</code>, <code>lib/xarray.c</code> for
+                        <code>filemap_get_pages</code>, folios, and the XArray API.
+                    </li>
+                    <li>
+                        <code>man 2 read</code>, <code>man 2 pread</code>, <code>man 2 mmap</code> for syscall semantics.
+                    </li>
+                    <li>
+                        perf &amp; strace docs:
+                        <code>man perf-stat</code>, <code>man perf-record</code>,
+                        <code>man perf-report</code>, <code>man strace</code>.
+                    </li>
+                </ul>
+            </div>
+        </section>
+    </main>
+</body>
+
+</html>

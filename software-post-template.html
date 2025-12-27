@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Software Post Template - Botta's Blog</title>
     <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="image-styles.css">
 </head>
 
 <body>
@@ -83,16 +84,11 @@
             <div class="content-block">
                 <h2 class="section-title">Code Reference</h2>
                 <p class="placeholder-text">Add a snippet that illustrates the critical logic, CLI command, or configuration.</p>
-                <div class="code-block">
-                    <pre><code>// Replace this block with your own snippet
-const importantRoutine = async () =&gt; {
-    const payload = await fetchImportantData();
-    return payload ?? [];
-};
-</code></pre>
-                </div>
-            </div>
-
+                    <div class="code-block">
+                        <pre><code><span class="code-comment">// Replace this block with your own snippet</span>
+<span class="code-keyword">const</span> importantRoutine = <span class="code-keyword">async</span> () <span class="code-operator">=&gt;</span> {
+    <span class="code-keyword">const</span> payload = <span class="code-keyword">await</span> <span class="code-function">fetchImportantData</span>();
+    <span class="code-keyword">return</span> payload <span class="code-operator">??</span> <span class="code-bracket">[]</span>;
             <div class="content-block">
                 <h2 class="section-title">Key Metrics / Signals</h2>
                 <div class="callout-grid">

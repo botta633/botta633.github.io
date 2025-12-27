@@ -24,26 +24,22 @@
 
     <div class="blog-container">
         <article class="featured-post">
-            <h2 class="post-title">Understanding Modern JavaScript Features</h2>
+            <h2 class="post-title">Oh Cache! How bigger FS cache can impact performance</h2>
             <div class="post-meta">Posted on: March 15, 2024 | JavaScript</div>
             <div class="post-excerpt">
-                Deep dive into the latest JavaScript features and how they're changing the way we write code...
+                Exploring the effects of increasing filesystem cache size on application performance and responsiveness...
             </div>
             <div class="code-preview">
-                // Example of modern JS features
-                const handleAsync = async () => {
-                try {
-                const data = await fetchData();
-                return data?.results ?? [];
-                } catch (error) {
-                console.error(error);
-                }
-                };
+                const fs = require('fs');
+                fs.writeFileSync('/path/to/file', data, { flag: 'w', encoding: 'utf8' });
             </div>
             <div class="post-tags">
-                <span class="tag">JavaScript</span>
-                <span class="tag">ES6+</span>
-                <span class="tag">Modern Web</span>
+                <span class="tag">filesystem</span>
+                <span class="tag">kernel</span>
+                <span class="tag">performance</span>
+            </div>
+            <div class="post-actions">
+                <a class="button-cyber" href="FSCache/FS-performance-impact.html">Read the deep dive</a>
             </div>
         </article>
 
@@ -65,7 +61,6 @@
             </div>
             <div class="post-actions">
                 <a class="button-cyber" href="kernel-support-virtualization.html">Read the deep dive</a>
-                <a class="text-link" href="software-post-template.html">Use the new post template</a>
             </div>
         </article>
 
