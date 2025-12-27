@@ -1,0 +1,6 @@
+record_size,total_bytes,mode,wall_time_sec,strace_syscalls,strace_syscall_time_sec,perf_cycles,perf_instructions,perf_cache_misses,perf_major_faults,perf_minor_faults,perf_context_switches
+1048576,8589934592,rand,1.141898,16454,1.274368,0,0,0,0,316,4
+262144,8589934592,rand,0.735765,65606,1.206744,0,0,0,0,124,3
+65536,8589934592,rand,0.680724,262216,1.501656,0,0,0,0,77,3
+16384,8589934592,rand,0.766102,1048648,2.292304,0,0,0,0,65,5
+4096,8589934592,rand,1.302721,4194376,6.138182,0,0,0,0,62,6
