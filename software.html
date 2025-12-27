@@ -14,10 +14,8 @@
         <nav class="nav">
             <ul>
                 <li><a href="index.html">Home</a></li>
-                <li><a href="#">About</a></li>
                 <li><a href="software.html">Software Blog</a></li>
                 <li><a href="life.html">Life Blog</a></li>
-                <li><a href="#">Contact</a></li>
             </ul>
         </nav>
     </header>
@@ -64,82 +62,7 @@
             </div>
         </article>
 
-        <article class="post-card">
-            <h2 class="post-title">React Performance Optimization</h2>
-            <div class="post-meta">Posted on: March 14, 2024 | React</div>
-            <div class="post-excerpt">
-                Essential techniques for optimizing your React applications for better performance...
-            </div>
-            <div class="code-preview">
-                const MemoizedComponent = React.memo(({ data }) => {
-                return <div>{data.map(item =>
-                    <Item key={item.id} {...item} />
-                    )}
-                </div>
-                });
-            </div>
-            <div class="post-tags">
-                <span class="tag">React</span>
-                <span class="tag">Performance</span>
-                <span class="tag">JavaScript</span>
-            </div>
-        </article>
 
-        <article class="post-card">
-            <h2 class="post-title">Building Scalable APIs with Node.js</h2>
-            <div class="post-meta">Posted on: March 13, 2024 | Backend</div>
-            <div class="post-excerpt">
-                Best practices and patterns for creating maintainable Node.js APIs...
-            </div>
-            <div class="code-preview">
-                app.use('/api', rateLimit({
-                windowMs: 15 * 60 * 1000,
-                max: 100
-                }));
-            </div>
-            <div class="post-tags">
-                <span class="tag">Node.js</span>
-                <span class="tag">API</span>
-                <span class="tag">Backend</span>
-            </div>
-        </article>
-
-        <article class="post-card">
-            <h2 class="post-title">TypeScript Advanced Types</h2>
-            <div class="post-meta">Posted on: March 12, 2024 | TypeScript</div>
-            <div class="post-excerpt">
-                Exploring advanced TypeScript features for better type safety...
-            </div>
-            <div class="code-preview">
-                type DeepPartial<T> = {
-                    [P in keyof T]?: T[P] extends object
-                    ? DeepPartial<T[P]>
-                        : T[P];
-                        };
-            </div>
-            <div class="post-tags">
-                <span class="tag">TypeScript</span>
-                <span class="tag">Advanced</span>
-                <span class="tag">Types</span>
-            </div>
-        </article>
-
-        <article class="post-card">
-            <h2 class="post-title">Software Post Template</h2>
-            <div class="post-meta">Reusable Layout | Authoring</div>
-            <div class="post-excerpt">
-                Save time when publishing new software posts. The template ships with hero copy, meta blocks, implementation
-                notes, metrics grid, and a resource list ready for your content.
-            </div>
-            <div class="post-tags">
-                <span class="tag">Template</span>
-                <span class="tag">Docs</span>
-                <span class="tag">Workflow</span>
-            </div>
-            <div class="post-actions">
-                <a class="button-cyber" href="software-post-template.html">Open template</a>
-            </div>
-        </article>
     </div>
 
     <div class="pagination">
