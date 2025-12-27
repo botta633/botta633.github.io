@@ -4,150 +4,232 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kernel Support for Virtualization - Botta's Blog</title>
+    <title>The Container Trinity: Namespaces, cgroups, & Layered FS - Botta's Blog</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 
 <body>
-    <header class="header">
-        <div class="logo">Code Chronicles</div>
-        <nav class="nav">
+<header class="header">
+    <div class="logo">Code Chronicles</div>
+    <nav class="nav">
+        <ul>
+            <li><a href="index.html">Home</a></li>
+            <li><a href="software.html">Software Blog</a></li>
+            <li><a href="life.html">Life Blog</a></li>
+        </ul>
+    </nav>
+</header>
+
+<main class="article-page">
+    <section class="article-hero">
+        <div class="article-category">Kernel Internals</div>
+        <h1>The Container Trinity: Namespaces, cgroups, and Layered FS</h1>
+        <p class="article-subtitle">
+            Dissecting the three Linux kernel features that create the illusion of a standalone container.
+        </p>
+        <div class="article-meta">
+            <span class="meta-pill">Published: December 27, 2025</span>
+            <span class="meta-pill">Reading time: 12 minutes</span>
+            <span class="meta-pill">Stack: Linux / C / OverlayFS</span>
+        </div>
+        <div class="article-hero-actions">
+            <a href="software.html" class="button-cyber">Back to Software Blog</a>
+        </div>
+    </section>
+
+    <section class="article-content">
+        <div class="content-block">
+            <h2 class="section-title">Executive Summary</h2>
+            <p>
+                A "container" does not exist as a first-class object in the Linux kernel. It is a userspace concept realized by combining three distinct kernel features: <strong>Namespaces</strong> (what you can see), <strong>Control Groups</strong> (what you can use), and <strong>Layered File Systems</strong> (how you store data).
+            </p>
+            <p>
+                In this post, we peel back the abstraction layer of tools like Docker or Podman. We will examine the `task_struct` kernel pointers that enforce isolation, write a C program to create a namespace from scratch, and analyze how OverlayFS achieves copy-on-write efficiency.
+            </p>
+        </div>
+
+        <div class="content-block">
+            <h2 class="section-title">Problem Statement</h2>
+            <p>
+                Traditional virtualization (VMs) relies on hypervisors to emulate hardware, which introduces significant overhead in boot time and memory footprint. We needed a way to run multiple applications on a single kernel while maintaining strict isolation and resource fairness.
+            </p>
+            
+            <div class="callout-grid">
+                <div class="callout-card">
+                    <h3>Isolation (Namespaces)</h3>
+                    <p>
+                        How do we prevent Process A from seeing Process B's PIDs or network traffic?
+                    </p>
+                </div>
+                <div class="callout-card">
+                    <h3>Accounting (cgroups)</h3>
+                    <p>
+                        How do we stop a single runaway process from consuming 100% of the host CPU?
+                    </p>
+                </div>
+                <div class="callout-card">
+                    <h3>Efficiency (Layered FS)</h3>
+                    <p>
+                        How do we spin up 100 containers from a 1GB image without using 100GB of disk space?
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <div class="content-block">
+            <h2 class="section-title">Architecture: The Process View</h2>
+            <p>
+                Every process in Linux is represented by a <code>task_struct</code>. To create a container, we don't build a new machine; we simply clone the current process but point its internal metadata structures to new, empty instances rather than the host's global structures.
+            </p>
+            
+            <p>
+                The kernel handles this via pointers attached to the process descriptor:
+            </p>
             <ul>
-                <li><a href="index.html">Home</a></li>
-                <li><a href="#">About</a></li>
-                <li><a href="software.html">Software Blog</a></li>
-                <li><a href="life.html">Life Blog</a></li>
-                <li><a href="#">Contact</a></li>
+                <li><strong><code>struct nsproxy</code></strong>: Holds pointers to the process's specific namespaces (PID, NET, MNT, UTS, IPC, USER).</li>
+                <li><strong><code>struct css_set</code></strong>: Points to the cgroup hierarchy ensuring the process adheres to resource limits.</li>
             </ul>
-        </nav>
-    </header>
+        </div>
 
-    <main class="article-page">
-        <section class="article-hero">
-            <div class="article-category">Systems Engineering</div>
-            <h1>Kernel Support for Virtualization</h1>
-            <p class="article-subtitle">How we tuned the Linux kernel to unlock nested virtualization and keep latency-friendly
-                scheduling guarantees for our internal sandbox fleet.</p>
-            <div class="article-meta">
-                <span class="meta-pill">Published: March 18, 2024</span>
-                <span class="meta-pill">Reading time: 7 minutes</span>
-                <span class="meta-pill">Stack: Linux, KVM, cgroups</span>
-            </div>
-            <div class="article-hero-actions post-actions">
-                <a href="software.html" class="button-cyber">Back to Software Blog</a>
-                <a href="software-post-template.html" class="text-link">Use this layout for your post</a>
-            </div>
-        </section>
+        <div class="content-block">
+            <h2 class="section-title">Code Reference: The Mechanics</h2>
+            <p>
+                Let's look at how these concepts map to actual code, starting with Namespaces.
+            </p>
 
-        <section class="article-content">
-            <div class="content-block">
-                <h2 class="section-title">Executive Summary</h2>
-                <p>Product asked for a way to run Android emulators inside our CI runners while the infrastructure team was
-                    rebuilding bare-metal hosts. The default kernel image blocked nested virtualization and caused unpredictable
-                    context switches. We patched and recompiled a minimal kernel, enabled the required modules, and added guardrails
-                    so build teams could opt-in with a single flag.</p>
+            <h3>1. Namespaces: The Walls</h3>
+            <p>
+                In the kernel source (<code>include/linux/nsproxy.h</code>), isolation is achieved by decoupling a process from the global system context.
+            </p>
+            <div class="code-block">
+<pre><code><span class="code-comment">/* kernel/nsproxy.c - Simplified view */</span>
+<span class="code-keyword">struct</span> <span class="code-type">nsproxy</span> {
+    <span class="code-type">atomic_t</span> count;
+    <span class="code-keyword">struct</span> <span class="code-type">uts_namespace</span> *uts_ns;
+    <span class="code-keyword">struct</span> <span class="code-type">ipc_namespace</span> *ipc_ns;
+    <span class="code-keyword">struct</span> <span class="code-type">mnt_namespace</span> *mnt_ns;
+    <span class="code-keyword">struct</span> <span class="code-type">pid_namespace</span> *pid_ns_for_children;
+    <span class="code-keyword">struct</span> <span class="code-type">net</span> 	         *net_ns;
+};</code></pre>
+            </div>
+            <p>
+                To enter a new namespace, we use the <code>clone()</code> syscall with specific flags. Here is a minimal C program that creates a process with its own hostname (UTS) and Process ID (PID) view.
+            </p>
+
+            <div class="code-block">
+<pre><code><span class="code-comment">// minimal_container.c</span>
+<span class="code-keyword">#define</span> _GNU_SOURCE
+<span class="code-keyword">#include</span> &lt;sched.h&gt;
+<span class="code-keyword">#include</span> &lt;stdio.h&gt;
+<span class="code-keyword">#include</span> &lt;stdlib.h&gt;
+<span class="code-keyword">#include</span> &lt;unistd.h&gt;
+
+<span class="code-keyword">static</span> <span class="code-type">char</span> child_stack[1048576];
+
+<span class="code-keyword">static</span> <span class="code-type">int</span> <span class="code-function">child_fn</span>(<span class="code-type">void</span> *arg) {
+    <span class="code-comment">// We are now PID 1 inside this namespace!</span>
+    <span class="code-function">printf</span>(<span class="code-string">"PID inside container: %ld\n"</span>, (<span class="code-type">long</span>)<span class="code-function">getpid</span>());
+    <span class="code-function">sethostname</span>(<span class="code-string">"container-node"</span>, <span class="code-number">14</span>);
+    <span class="code-function">system</span>(<span class="code-string">"mount -t proc proc /proc"</span>); <span class="code-comment">// Remount proc to hide host processes</span>
+    <span class="code-function">execlp</span>(<span class="code-string">"/bin/bash"</span>, <span class="code-string">"/bin/bash"</span>, NULL);
+    <span class="code-keyword">return</span> <span class="code-number">0</span>;
+}
+
+<span class="code-type">int</span> <span class="code-function">main</span>() {
+    <span class="code-comment">// CLONE_NEWPID: New PID namespace</span>
+    <span class="code-comment">// CLONE_NEWUTS: New Hostname namespace</span>
+    <span class="code-comment">// CLONE_NEWNS:  New Mount namespace</span>
+    <span class="code-type">pid_t</span> child_pid = <span class="code-function">clone</span>(child_fn, child_stack + <span class="code-number">1048576</span>, 
+        CLONE_NEWPID | CLONE_NEWUTS | CLONE_NEWNS | SIGCHLD, NULL);
+    
+    <span class="code-function">waitpid</span>(child_pid, NULL, <span class="code-number">0</span>);
+    <span class="code-keyword">return</span> <span class="code-number">0</span>;
+}</code></pre>
             </div>
 
-            <div class="content-block">
-                <h2 class="section-title">Problem Statement</h2>
-                <p>Our in-house sandbox fleet uses KVM on Ubuntu LTS, but the kernel shipped without nested virtualization features,
-                    meaning emulator workloads had to run on scarce GPU builders. Meanwhile VM density dropped by 30% because of
-                    scheduler contention when we tried enabling nested support naively.</p>
-                <div class="callout-grid">
-                    <div class="callout-card">
-                        <h3>Primary Objective</h3>
-                        <p>Support nested virtualization for Android + QEMU pipelines without destabilizing the fleet.</p>
-                    </div>
-                    <div class="callout-card">
-                        <h3>Guardrails</h3>
-                        <p>No downtime for long-running staging VMs and no regression in noisy-neighbor isolation.</p>
-                    </div>
-                    <div class="callout-card">
-                        <h3>Timeline</h3>
-                        <p>Investigation (1 sprint), prototype kernel (1 sprint), rollout + observability (2 sprints).</p>
-                    </div>
+            <h3>2. cgroups: The Budget</h3>
+            <p>
+                While namespaces hide information, Control Groups (cgroups) limit resources. In cgroup v2, the kernel uses the <code>cgroup_subsys_state</code> struct to track usage.
+            </p>
+            <p>
+                We can manipulate this purely via the filesystem. No C code required—just shell.
+            </p>
+            <div class="code-block">
+<pre><code><span class="code-comment"># Create a new cgroup</span>
+mkdir /sys/fs/cgroup/my_container
+
+<span class="code-comment"># Limit CPU usage to 20% (20000 of 100000 microseconds)</span>
+echo "20000 100000" > /sys/fs/cgroup/my_container/cpu.max
+
+<span class="code-comment"># Limit Memory to 512MB</span>
+echo "536870912" > /sys/fs/cgroup/my_container/memory.max
+
+<span class="code-comment"># Add the current shell (and its children) to this group</span>
+echo $$ > /sys/fs/cgroup/my_container/cgroup.procs</code></pre>
+            </div>
+
+            <h3>3. Layered Filesystems (OverlayFS): The Floorplan</h3>
+            
+            <p>
+                To start containers instantly, we rely on Union Filesystems. OverlayFS combines a read-only <strong>LowerDir</strong> (the base image) with a writable <strong>UpperDir</strong>.
+            </p>
+            <p>
+                When a process reads a file, the kernel looks in the UpperDir; if missing, it falls through to LowerDir. When writing, if the file exists in LowerDir, the kernel performs a <strong>copy_up</strong> operation, copying the file to UpperDir before modification.
+            </p>
+            <div class="code-block">
+<pre><code><span class="code-comment"># How a container runtime mounts the image layers</span>
+mount -t overlay overlay \
+  -o lowerdir=/var/lib/images/ubuntu_base, \
+     upperdir=/var/lib/containers/c1/diff, \
+     workdir=/var/lib/containers/c1/work \
+  /var/lib/containers/c1/merged</code></pre>
+            </div>
+        </div>
+
+        <div class="content-block">
+            <h2 class="section-title">Key Metrics / Signals</h2>
+            <div class="callout-grid">
+                <div class="callout-card">
+                    <h3>Startup Latency</h3>
+                    <p>
+                        <strong>VM:</strong> 30s - 2min (BIOS post + Kernel Boot + Init).<br>
+                        <strong>Container:</strong> &lt;100ms. It is literally just a <code>clone()</code> syscall cost plus filesystem mount overhead.
+                    </p>
+                    <span class="pill">Performance</span>
+                </div>
+                <div class="callout-card">
+                    <h3>Storage Density</h3>
+                    <p>
+                        Running 10 instances of Ubuntu.<br>
+                        <strong>VM:</strong> 10GB (10 x 1GB duplicates).<br>
+                        <strong>OverlayFS:</strong> 1.1GB (1GB Shared Base + 10 x 10MB diffs).
+                    </p>
+                    <span class="pill">Efficiency</span>
                 </div>
             </div>
+        </div>
 
-            <div class="content-block">
-                <h2 class="section-title">Architecture / Flow</h2>
-                <p>We kept our existing PXE boot image but layered in two components:</p>
-                <ul>
-                    <li>Feature-gated kernel build with the `kvm_intel` and `kvm_amd` modules configured for nested support.</li>
-                    <li>An agent extension that detects nested workloads and shifts them into latency-friendly cgroup slices.</li>
-                </ul>
-                <p>The control plane now publishes a metadata flag per VM pool, so clusters mix legacy and nested-enabled hosts
-                    without double-imaging racks.</p>
-            </div>
+        <div class="content-block">
+            <h2 class="section-title">Learnings &amp; Next Steps</h2>
+            <p>
+                Understanding these primitives demystifies container errors. "Permission Denied" often maps to User Namespaces; "OOM Killed" maps directly to <code>memory.max</code> in cgroups; and confusing file disappearances can often be traced to OverlayFS opaque directories.
+            </p>
+            <p class="insight-quote">"A container is not a sandbox; it is a shared kernel with blinders on. The security boundary is significantly thinner than a hypervisor."</p>
+            <p>
+                Next, I want to explore <strong>eBPF</strong> (Extended Berkeley Packet Filter) and how modern observability tools use it to peek <em>through</em> these namespaces to monitor container performance from the host.
+            </p>
+        </div>
 
-            <div class="content-block">
-                <h2 class="section-title">Implementation Notes</h2>
-                <ul>
-                    <li>Recompiled the kernel with `CONFIG_KVM_INTEL=y`, `CONFIG_KVM_AMD=y`, and turned on `CONFIG_PREEMPT` to reduce
-                        worst-case scheduling jitter.</li>
-                    <li>Added a systemd unit that writes sane defaults (`posted_intr=1`, `enable_apicv=1`) before the hypervisor
-                        spins up guests.</li>
-                    <li>Extended our observability stack with eBPF counters (vmexit, posted interrupts) so we could compare nested vs
-                        standard hosts in Grafana.</li>
-                </ul>
-            </div>
-
-            <div class="content-block">
-                <h2 class="section-title">Code Reference</h2>
-                <p>This is the snippet we drop into `/etc/modprobe.d/kvm.conf` on every nested-enabled host:</p>
-                <div class="code-block">
-                    <pre><code># Enable nested virtualization with EPT support
-options kvm_intel nested=1 ept=1 fast_mmio=1
-
-# Tune halt polling window for emulator-heavy workloads
-options kvm halt_poll_ns_grow=20000 halt_poll_ns_shrink=500
-
-# AMD fallback
-options kvm_amd nested=1 npt=1
-</code></pre>
-                </div>
-            </div>
-
-            <div class="content-block">
-                <h2 class="section-title">Key Metrics / Signals</h2>
-                <div class="callout-grid">
-                    <div class="callout-card">
-                        <h3>Before</h3>
-                        <p>Average emulator boot time: 268s. Host CPU steal above 18% for heavy tenants.</p>
-                        <span class="pill">Baseline</span>
-                    </div>
-                    <div class="callout-card">
-                        <h3>After</h3>
-                        <p>Boot time dropped to 143s and CPU steal stayed under 8% after tuning halt-poll + cpuset layouts.</p>
-                        <span class="pill">Result</span>
-                    </div>
-                    <div class="callout-card">
-                        <h3>Monitoring</h3>
-                        <p>Grafana dashboard `INFRA/KVM-NESTED` tracks vmexit rate, IRQ latency, and cgroup throttling events.</p>
-                        <span class="pill">Ops</span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="content-block">
-                <h2 class="section-title">Learnings &amp; Next Steps</h2>
-                <p class="insight-quote">"Treat nested virtualization as an opt-in kernel personality. The build system and
-                    telemetry hooks matter more than the actual `CONFIG` bits."</p>
-                <p>Next, we're beta-testing AMD Genoa hosts to see if SEV-SNP plus nested virtualization is viable for multi-tenant
-                    customers. We'll also ship an Ansible role so partner teams can re-image lab hardware with the same defaults.</p>
-            </div>
-
-            <div class="content-block">
-                <h2 class="section-title">Resources</h2>
-                <ul class="resource-links">
-                    <li><a href="https://www.kernel.org/doc/html/latest/virt/kvm/index.html">Official KVM kernel docs</a></li>
-                    <li><a href="https://docs.kernel.org/admin-guide/kernel-parameters.html">Kernel parameter reference</a></li>
-                    <li><a href="https://fedoraproject.org/wiki/How_to_enable_nested_virtualization_in_KVM">How-to for nested
-                            virtualization</a></li>
-                </ul>
-            </div>
-        </section>
-    </main>
+        <div class="content-block">
+            <h2 class="section-title">Resources</h2>
+            <ul class="resource-links">
+                <li><a href="https://man7.org/linux/man-pages/man7/namespaces.7.html">Linux Man Pages: Namespaces</a></li>
+                <li><a href="https://www.kernel.org/doc/Documentation/filesystems/overlayfs.txt">Kernel Docs: OverlayFS</a></li>
+                <li><a href="https://man7.org/linux/man-pages/man7/cgroups.7.html">Cgroups v2 Documentation</a></li>
+            </ul>
+        </div>
+    </section>
+</main>
 </body>
 
 </html>

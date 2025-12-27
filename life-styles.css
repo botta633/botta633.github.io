@@ -909,3 +909,285 @@ body::after {
 .quote-preview:nth-child(even) {
     --random-border-width: 1px;
 }
+
+/* Mobile Responsive Design */
+@media (max-width: 1024px) {
+    .blog-container {
+        margin: 60px auto;
+        padding: 0 30px;
+        gap: 40px;
+    }
+
+    .featured-post,
+    .post-card {
+        padding: 40px 50px;
+    }
+
+    .post-title {
+        font-size: 2.2rem;
+    }
+
+    .featured-post .post-title {
+        font-size: 2.8rem;
+    }
+
+    .post-meta {
+        font-size: 1.1rem;
+    }
+
+    .post-excerpt {
+        font-size: 1.1rem;
+    }
+
+    .tag {
+        padding: 10px 20px;
+        font-size: 1rem;
+    }
+}
+
+@media (max-width: 768px) {
+    body {
+        background-attachment: fixed;
+    }
+
+    .blog-container {
+        margin: 40px auto;
+        padding: 0 20px;
+        gap: 30px;
+    }
+
+    .featured-post,
+    .post-card {
+        padding: 30px 25px;
+    }
+
+    .post-title {
+        font-size: 1.8rem;
+    }
+
+    .featured-post .post-title {
+        font-size: 2.2rem;
+    }
+
+    .post-meta {
+        font-size: 1rem;
+        display: block;
+        margin-bottom: 20px;
+    }
+
+    .post-excerpt {
+        font-size: 1rem;
+        margin-bottom: 30px;
+    }
+
+    .tag {
+        padding: 8px 16px;
+        font-size: 0.95rem;
+        margin: 5px;
+    }
+
+    .post-tags {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 10px;
+    }
+
+    .quote-preview {
+        font-size: 1.1rem;
+        padding: 20px;
+    }
+
+    .header {
+        padding: 15px 20px;
+    }
+
+    .nav ul {
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .nav ul li a {
+        font-size: 0.9rem;
+        padding: 5px 8px;
+    }
+
+    .blog-container::before {
+        display: none;
+    }
+
+    .blog-container::after {
+        display: none;
+    }
+
+    .featured-post::before {
+        display: none;
+    }
+
+    .post-card::before {
+        display: none;
+    }
+}
+
+@media (max-width: 600px) {
+    .blog-container {
+        margin: 30px auto;
+        padding: 0 15px;
+        gap: 20px;
+    }
+
+    .featured-post,
+    .post-card {
+        padding: 20px 15px;
+        width: 100%;
+    }
+
+    .post-title {
+        font-size: 1.5rem;
+        margin-bottom: 15px;
+    }
+
+    .featured-post .post-title {
+        font-size: 1.9rem;
+    }
+
+    .post-title::after {
+        width: 60px;
+        margin: 10px auto;
+    }
+
+    .post-meta {
+        font-size: 0.9rem;
+        padding: 0 10px;
+        margin-bottom: 15px;
+    }
+
+    .post-excerpt {
+        font-size: 0.95rem;
+        margin-bottom: 20px;
+        line-height: 1.6;
+        max-width: 100%;
+        padding: 0 10px;
+    }
+
+    .tag {
+        padding: 6px 12px;
+        font-size: 0.85rem;
+    }
+
+    .post-tags {
+        justify-content: center;
+        gap: 8px;
+        margin-bottom: 15px;
+    }
+
+    .quote-preview {
+        font-size: 1rem;
+        padding: 15px;
+        margin-bottom: 20px;
+    }
+
+    .header {
+        padding: 12px 15px;
+        flex-direction: column;
+    }
+
+    .logo {
+        font-size: 1.3rem;
+        text-align: center;
+        margin-bottom: 10px;
+    }
+
+    .nav ul {
+        gap: 8px;
+        width: 100%;
+        justify-content: center;
+        flex-direction: column;
+        align-items: center;
+    }
+
+    .nav ul li {
+        width: 100%;
+        text-align: center;
+    }
+
+    .nav ul li a {
+        font-size: 0.8rem;
+        display: block;
+        padding: 8px 5px;
+    }
+
+    .header::before,
+    .header::after {
+        display: none;
+    }
+
+    .pagination {
+        gap: 5px;
+    }
+
+    .page-number {
+        padding: 6px 10px;
+        font-size: 0.8rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .blog-container {
+        margin: 20px auto;
+        padding: 0 10px;
+        gap: 15px;
+    }
+
+    .featured-post,
+    .post-card {
+        padding: 15px 10px;
+        border: 3px solid var(--oil-gold-glow);
+    }
+
+    .post-title {
+        font-size: 1.3rem;
+    }
+
+    .featured-post .post-title {
+        font-size: 1.6rem;
+    }
+
+    .post-meta {
+        font-size: 0.8rem;
+        padding: 0 5px;
+    }
+
+    .post-excerpt {
+        font-size: 0.9rem;
+        padding: 0 5px;
+    }
+
+    .tag {
+        padding: 5px 10px;
+        font-size: 0.75rem;
+        margin: 4px;
+    }
+
+    .quote-preview {
+        font-size: 0.95rem;
+        padding: 12px;
+    }
+
+    .header {
+        padding: 10px;
+    }
+
+    .logo {
+        font-size: 1.1rem;
+    }
+
+    .nav ul li a {
+        font-size: 0.75rem;
+        padding: 6px 4px;
+    }
+
+    .post-title::after {
+        width: 50px;
+    }
+}
