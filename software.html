@@ -62,6 +62,29 @@
             </div>
         </article>
 
+        <article class="post-card">
+            <h2 class="post-title">False Sharing: Killing the performance of multithreaded applications</h2>
+            <div class="post-meta">Posted on: March 18, 2024 | Performance</div>
+            <div class="post-excerpt">
+                How a subtle hardware mechanism can destroy your application's IPC.
+            </div>
+            <div class="code-preview">
+                // Padding to prevent false sharing
+                struct PaddedCounter {
+                    alignas(64) std::atomic<int> counter;
+                    char padding[64 - sizeof(std::atomic<int>)];
+                };
+            </div>
+            <div class="post-tags">
+                <span class="tag">KVM</span>
+                <span class="tag">Kernel</span>
+                <span class="tag">Virtualization</span>
+            </div>
+            <div class="post-actions">
+                <a class="button-cyber" href="falseSharing/falseSharing.html">Read the deep dive</a>
+            </div>
+        </article>
+
 
     </div>
 
