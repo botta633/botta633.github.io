@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>False Sharing: The 64-Byte Trap - Botta's Blog</title>
+    <link rel="stylesheet" href="../styles.css">
+    <link rel="stylesheet" href="../image-styles.css">
+    <style>
+        /* Minimal custom CSS for the side-by-side comparison */
+        .comparison-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }
+        @media (min-width: 768px) {
+            .comparison-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+        .metric-card {
+            background: #1e1e1e;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+        .metric-card img {
+            width: 100%;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .caption {
+            font-size: 0.85rem;
+            color: #aaa;
+            margin-top: 5px;
+            line-height: 1.4;
+        }
+        figure {
+            margin: 2rem 0;
+            text-align: center;
+        }
+        figcaption {
+            color: #888;
+            margin-top: 0.5rem;
+            font-size: 0.9rem;
+            font-style: italic;
+        }
+    </style>
+</head>
+
+<body>
+    <header class="header">
+        <div class="logo">Code Chronicles</div>
+        <nav class="nav">
+            <ul>
+                <li><a href="../index.html">Home</a></li>
+                <li><a href="../software.html">Software Blog</a></li>
+                <li><a href="../life.html">Life Blog</a></li>
+             </ul>
+        </nav>
+    </header>
+
+    <main class="article-page">
+        <section class="article-hero">
+            <div class="article-category">Systems Engineering</div>
+            <h1>False Sharing: When Multi-threading Makes You Slower</h1>
+            <p class="article-subtitle">How a subtle hardware mechanism can destroy your application's IPC.</p>
+            <div class="article-meta">
+                <span class="meta-pill">Published: January 04, 2026</span>
+                <span class="meta-pill">Reading time: 8 minutes</span>
+                <span class="meta-pill">Stack: C / Linux / Hardware</span>
+            </div>
+            <div class="article-hero-actions">
+                <a href="software.html" class="button-cyber">Back to Software Blog</a>
+            </div>
+        </section>
+
+        <section class="article-content">
+            <div class="content-block">
+                <h2 class="section-title">Executive Summary</h2>
+                <p>
+                    I recently diagnosed a concurrency bug where splitting a workload across two threads resulted in a 
+                    <strong>10x performance degradation</strong> compared to a single thread. The root cause was not logic contention (locks), 
+                    but hardware contention known as <strong>False Sharing</strong>. By understanding the CPU's cache coherency protocol and 
+                    padding data structures to align with 64-byte cache lines, we restored the expected parallel speedup.
+                </p>
+            </div>
+
+            <div class="content-block">
+                <h2 class="section-title">The Mystery: Negative Scaling</h2>
+                <p>
+                    We intuitively expect that adding more cores to a parallelizable task will reduce execution time. 
+                    However, the numbers told a different story. I ran <code>perf stat</code> on both versions to investigate.
+                </p>
+                
+                <div class="comparison-grid">
+                    <div class="metric-card">
+                        <h3>❌ The Failure (False Sharing)</h3>
+                        <img src="falseSharing_stat.png" alt="perf stat output showing high execution time and low IPC">
+                        <p class="caption">
+                            Note the incredibly low <strong>IPC (Instructions Per Cycle) of 0.15</strong>. 
+                            The CPU is stalled, waiting on memory 85% of the time.
+                        </p>
+                    </div>
+
+                    <div class="metric-card">
+                        <h3>✅ The Fix (Padded)</h3>
+                        <img src="noFalseSharing_stat.png" alt="perf stat output showing low execution time and high IPC">
+                        <p class="caption">
+                            With padding, IPC jumps to <strong>2.50</strong>. 
+                            The execution time drops drastically as the cores work independently.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="content-block">
+                <h2 class="section-title">The Hardware Reality: Cache Lines & MESI</h2>
+                <p>
+                    To understand why this happens, we must look at the hardware. CPUs do not access memory one byte at a time; 
+                    they fetch data in chunks called <strong>Cache Lines</strong> (typically 64 bytes on x86).
+                </p>
+                
+                <figure>
+                    <img src="sharedDataBetweenCore.png" alt="Diagram showing two cores accessing the same shared cache line" style="max-width: 100%; border: 1px solid #333; border-radius: 8px;">
+                    <figcaption>Visualizing the conflict: Two cores fighting over the same physical cache line despite modifying different variables.</figcaption>
+                </figure>
+
+                <p>
+                    Even though <code>Thread A</code> only modifies variable <code>x</code> and <code>Thread B</code> only modifies variable <code>y</code>, 
+                    if they sit on the same cache line, the CPU treats them as a single unit. To maintain data consistency, 
+                    the CPU uses the <strong>MESI Protocol</strong> (Modified, Exclusive, Shared, Invalid). 
+                </p>
+                <p>
+                    <strong>The Golden Rule:</strong> To write to a cache line, a core must have <em>Exclusive Ownership</em> 
+                    of that line. It must invalidate copies of that line in all other cores.
+                </p>
+            </div>
+
+            <div class="content-block">
+                <h2 class="section-title">The "Pipeline Stall" Breakdown</h2>
+                <p>
+                    This is where performance dies. It's not just about network traffic on the bus; it's about the CPU pipeline freezing.
+                    Here is the micro-architectural timeline of a "False Sharing" event:
+                </p>
+
+                <figure>
+                     <img src="invalidateSignal.png" alt="Diagram showing the invalidation signal sent between cores" style="max-width: 100%; border: 1px solid #333; border-radius: 8px; margin-bottom: 20px;">
+                     <img src="stall.png" alt="Diagram showing the resulting CPU pipeline stall" style="max-width: 100%; border: 1px solid #333; border-radius: 8px;">
+                     <figcaption>Top: Core A sends an invalidation signal. Bottom: This forces Core B to stall its pipeline (red bubble) while waiting for fresh data.</figcaption>
+                </figure>
+
+                <ul>
+                    <li><strong>Step 1: The Write Request.</strong> Core 1 tries to write to <code>x</code>. It checks its L1 cache and sees the line is in <code>Shared</code> state (Read-Only).</li>
+                    <li><strong>Step 2: The Stall.</strong> The <strong>Store Buffer</strong> cannot drain because the core doesn't own the line. The <strong>CPU Pipeline Stalls</strong>. Execution stops.</li>
+                    <li><strong>Step 3: The RFO (Request For Ownership).</strong> Core 1 broadcasts a signal: "I need this line! Invalidate your copies!"</li>
+                    <li><strong>Step 4: The Flush.</strong> Core 2 (who currently has the line "Modified" because it just wrote to <code>y</code>) is forced to pause, flush its data to the bus, and mark its own cache line as <code>Invalid</code>.</li>
+                    <li><strong>Step 5: The Transfer.</strong> The data travels across the interconnect (UPI/Infinity Fabric). This takes <strong>100+ cycles</strong> compared to the ~4 cycles of an L1 hit.</li>
+                </ul>
+            </div>
+
+            <div class="content-block">
+                <h2 class="section-title">The Smoking Gun: HITM Events</h2>
+                <p>
+                    To confirm my suspicion of False Sharing, I used <code>perf c2c</code> (Cache-to-Cache). 
+                    This tool tracks "HITM" (Hit Modified) events—where a core loads data that was modified in another core's cache.
+                </p>
+
+                <figure>
+                    <img src="falseSharing_c2c.png" alt="perf c2c report showing 99% HITM on the shared cache line" style="width: 100%; border: 1px solid #00ff00; border-radius: 8px;">
+                    <figcaption>
+                        The Red Flag: The "HITM" column shows extreme contention (99%+) on the single cache line hosting both counters.
+                    </figcaption>
+                </figure>
+                
+                <p>
+                    If the data is truly shared (like a lock), some HITM is expected. But for independent variables, 
+                    <strong>this column should be near zero.</strong> Seeing 90%+ here is the definitive proof of false sharing.
+                </p>
+            </div>
+
+            <div class="content-block">
+                <h2 class="section-title">Code Reference: The Fix</h2>
+                <p>The solution is to forcibly separate the variables into different cache lines using padding.</p>
+                <div class="code-block">
+<pre><code><span class="code-comment">// The Problematic Struct</span>
+<span class="code-keyword">struct</span> BadData {
+    <span class="code-keyword">long</span> x; <span class="code-comment">// 8 bytes</span>
+    <span class="code-keyword">long</span> y; <span class="code-comment">// 8 bytes (Lives in the same 64-byte line as x)</span>
+};
+
+<span class="code-comment">// The Fixed Struct</span>
+<span class="code-keyword">struct</span> GoodData {
+    <span class="code-keyword">long</span> x;
+    <span class="code-keyword">char</span> padding[64]; <span class="code-comment">// Force 'y' to the next cache line</span>
+    <span class="code-keyword">long</span> y;
+};
+</code></pre>
+                </div>
+            </div>
+
+            <div class="content-block">
+                <h2 class="section-title">Learnings & Next Steps</h2>
+                <p>
+                    Performance engineering isn't just about Big O notation. It's about hardware sympathy. 
+                    When variables are independent in logic but coupled in hardware, you pay the price of distributed consensus (MESI) 
+                    on every single instruction.
+                </p>
+                <ul>
+                    <li>Always check <code>perf c2c</code> when multithreaded performance doesn't scale.</li>
+                    <li>Use <code>alignas(64)</code> in C++ or <code>__attribute__((aligned(64)))</code> in C to handle this automatically.</li>
+                    <li>Be wary of arrays of counters or locks; they are prime candidates for false sharing.</li>
+                </ul>
+            </div>
+        </section>
+    </main>
+</body>
+
+</html>
